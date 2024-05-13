@@ -13,7 +13,26 @@ public:
            << "\n";
 
     /// @todo(CSCD70) Please complete this method.
-
+    for (const auto &fun : M.getFunctionList()) {
+      outs() << "Function Name: " << fun.getName() << "\n";
+      outs() << "Number of Arguments: " << fun.getFunction().arg_size()
+             << (fun.isVarArg() ? "*" : "") << "\n";
+      int callsNum = 0;
+      for (auto user : fun.users()) {
+        if (auto ci = dyn_cast<CallInst>(user)) {
+          if (ci->getCalledFunction() == &fun) {
+            ++callsNum;
+          }
+        }
+      }
+      outs() << "Number of Calls: " << callsNum << "\n";
+      outs() << "Number OF BBs: " << fun.size() << "\n";
+      int instrNum = 0;
+      for (auto it = fun.begin(); it != fun.end(); ++it) {
+        instrNum += it->size();
+      }
+      outs() << "Number of Instructions: " << instrNum << "\n";
+    }
     return PreservedAnalyses::all();
   }
 }; // class FunctionInfoPass
