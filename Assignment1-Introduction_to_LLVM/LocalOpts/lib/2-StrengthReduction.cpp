@@ -21,6 +21,7 @@ PreservedAnalyses StrengthReductionPass::run([[maybe_unused]] Function &F,
 
   /// @todo(CSCD70) Please complete this method.
   for (auto &bb : F) {
+    std::list<Instruction *> toDelete;
     for (auto &instr : bb) {
       if (instr.getNumOperands() != 2) {
         continue;
@@ -43,10 +44,12 @@ PreservedAnalyses StrengthReductionPass::run([[maybe_unused]] Function &F,
           auto v = ConstantInt::getSigned(instr.getType(), shift1);
           instr.replaceAllUsesWith(
               BinaryOperator::Create(Instruction::Shl, op2, v, "xxx", &instr));
+          toDelete.push_back(&instr);
         } else if (shift2 != -1) {
           auto v = ConstantInt::getSigned(instr.getType(), shift2);
           instr.replaceAllUsesWith(
               BinaryOperator::Create(Instruction::Shl, op1, v, "xxx", &instr));
+          toDelete.push_back(&instr);
         }
         break;
       }
@@ -55,12 +58,16 @@ PreservedAnalyses StrengthReductionPass::run([[maybe_unused]] Function &F,
           auto v = ConstantInt::getSigned(instr.getType(), shift2);
           instr.replaceAllUsesWith(
               BinaryOperator::Create(Instruction::AShr, op1, v, "xxx", &instr));
+          toDelete.push_back(&instr);
         }
         break;
       }
       default:
         break;
       }
+    }
+    for (auto it : toDelete) {
+      it->eraseFromParent();
     }
   }
   return PreservedAnalyses::none();

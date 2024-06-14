@@ -1,4 +1,5 @@
 #include "LocalOpts.h"
+#include <iostream>
 #include <llvm/IR/Constants.h>
 
 using namespace llvm;
@@ -17,6 +18,9 @@ PreservedAnalyses AlgebraicIdentityPass::run([[maybe_unused]] Function &F,
       int64_t constVal1, constVal2;
       if (isa<ConstantInt>(op1)) {
         constVal1 = dyn_cast<ConstantInt>(op1)->getSExtValue();
+        if (constVal1 == 1) {
+          std::cout << op1 << std::endl;
+        }
       }
       if (isa<ConstantInt>(op2)) {
         constVal2 = dyn_cast<ConstantInt>(op2)->getSExtValue();
