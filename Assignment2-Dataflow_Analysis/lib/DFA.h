@@ -207,10 +207,10 @@ public:
     }
     while (traverseCFG(F)) {
       Framework_t::printInstDomainValMap(F);
-      LOG_ANALYSIS_INFO << "==================================================="
-                           "=================\n";
+      LOG_ANALYSIS_INFO
+          << "==================================================="
+             "===================================================\n";
     }
-    // Framework_t::printInstDomainValMap(F);
     return std::make_tuple(DomainIdMap, DomainVector, BVs, InstDomainValMap);
   }
 };
