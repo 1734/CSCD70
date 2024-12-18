@@ -75,6 +75,9 @@ private:
                            dfa::Union<dfa::IntervalWrapper>>;
   std::unordered_map<llvm::ICmpInst *, llvm::Value *>
       ConditionToBindVariableMap;
+  std::unordered_map<llvm::ICmpInst *, size_t> ConditionBitIndex;
+  std::unordered_map<llvm::Value *, std::vector<llvm::ICmpInst *>>
+      BindedVariableToConditionsMap;
   friend llvm::AnalysisInfoMixin<IntegerRange>;
   static llvm::AnalysisKey Key;
 
@@ -121,6 +124,20 @@ private:
     return Operands;
   }
 
+  std::vector<size_t> getIndexesMatchingBits(const llvm::Value *AnValue,
+                                             size_t OneBits, size_t ZeroBits) {
+    std::vector<size_t> Indexes;
+    for (size_t I = 0; I < (size_t)(1 << BindedVariableToConditionsMap
+                                             .at((llvm::Value *)AnValue)
+                                             .size());
+         ++I) {
+      if ((I & OneBits) != 0 || (I & ZeroBits) != ZeroBits) {
+        Indexes.push_back(I);
+      }
+    }
+    return Indexes;
+  }
+
 public:
   using Result = typename ForwardAnalysis_t::AnalysisResult_t;
   using ForwardAnalysis_t::run;
@@ -144,6 +161,7 @@ public:
           Changed = true;
         }
         PrevInstrOut = &InstDomainValMap[&Inst];
+        printInstDomainValMap(Inst);
       }
     }
     return Changed;
@@ -154,45 +172,56 @@ public:
 
     /// @todo(CSCD70) Please complete this method.
     Initializer(DomainIdMap, DomainVector, ConditionToBindVariableMap).visit(F);
+
+    for (const auto &[condition, variable] : ConditionToBindVariableMap) {
+      InternalRuntimeChecker(DomainIdMap.find(variable) != DomainIdMap.end());
+      if (BindedVariableToConditionsMap.find(variable) ==
+          BindedVariableToConditionsMap.end()) {
+        BindedVariableToConditionsMap[variable] =
+            std::vector<llvm::ICmpInst *>();
+      }
+      ConditionBitIndex[condition] =
+          BindedVariableToConditionsMap.at(variable).size();
+      BindedVariableToConditionsMap[variable].push_back(condition);
+    }
+
+    for (const auto &[BindedVariable, Conditions] :
+         BindedVariableToConditionsMap) {
+      llvm::errs() << *BindedVariable << ": [";
+      for (const llvm::ICmpInst *AnICmpInst : Conditions) {
+        llvm::errs() << *AnICmpInst << ", ";
+      }
+      llvm::errs() << "]\n";
+    }
+
     TopDomainVal = dfa::Union<dfa::IntervalWrapper>().top(DomainVector.size());
     BottomDomainVal =
         dfa::Union<dfa::IntervalWrapper>().bottom(DomainVector.size());
-    for (const auto [condition, variable] : ConditionToBindVariableMap) {
-      InternalRuntimeChecker(DomainIdMap.find(variable) != DomainIdMap.end());
-      size_t VariableIndex = DomainIdMap[variable];
-
-      dfa::ConditionalInterval::CustomKey KeyTrueBranch(
-          condition, dfa::ConditionalInterval::KindBranch::TrueBranch);
-      dfa::ConditionalInterval::CustomKey KeyFalseBranch(
-          condition, dfa::ConditionalInterval::KindBranch::FalseBranch);
+    for (const auto &[BindedVariable, Conditions] :
+         BindedVariableToConditionsMap) {
+      size_t UItvsSize = 1 << Conditions.size();
+      size_t VariableIndex = DomainIdMap.at(BindedVariable);
 
       if (TopDomainVal[VariableIndex].tryGetUnconditionalInterval()) {
         TopDomainVal[VariableIndex] = dfa::ConditionalInterval();
       }
       InternalRuntimeChecker(
           TopDomainVal[VariableIndex].tryGetConditionalInterval());
-      TopDomainVal[VariableIndex]
-          .tryGetConditionalInterval()
-          ->ICmpInstToIntervalMap[KeyTrueBranch] =
-          dfa::UnconditionalInterval::top();
-      TopDomainVal[VariableIndex]
-          .tryGetConditionalInterval()
-          ->ICmpInstToIntervalMap[KeyFalseBranch] =
-          dfa::UnconditionalInterval::top();
 
       if (BottomDomainVal[VariableIndex].tryGetUnconditionalInterval()) {
         BottomDomainVal[VariableIndex] = dfa::ConditionalInterval();
       }
       InternalRuntimeChecker(
           BottomDomainVal[VariableIndex].tryGetConditionalInterval());
-      BottomDomainVal[VariableIndex]
-          .tryGetConditionalInterval()
-          ->ICmpInstToIntervalMap[KeyTrueBranch] =
-          dfa::UnconditionalInterval::bottom();
-      BottomDomainVal[VariableIndex]
-          .tryGetConditionalInterval()
-          ->ICmpInstToIntervalMap[KeyFalseBranch] =
-          dfa::UnconditionalInterval::bottom();
+
+      for (size_t UItvIndex = 0; UItvIndex < UItvsSize; ++UItvIndex) {
+        TopDomainVal[VariableIndex]
+            .tryGetConditionalInterval()
+            ->UItvs.push_back(dfa::UnconditionalInterval::top());
+        BottomDomainVal[VariableIndex]
+            .tryGetConditionalInterval()
+            ->UItvs.push_back(dfa::UnconditionalInterval::bottom());
+      }
     }
 
     LOG_ANALYSIS_INFO << stringifyDomainWithMask(TopDomainVal) << "\n";
@@ -206,7 +235,7 @@ public:
       }
     }
     while (traverseCFG(F)) {
-      Framework_t::printInstDomainValMap(F);
+      // Framework_t::printInstDomainValMap(F);
       LOG_ANALYSIS_INFO
           << "==================================================="
              "===================================================\n";

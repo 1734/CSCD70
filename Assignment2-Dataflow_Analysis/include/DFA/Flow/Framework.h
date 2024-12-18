@@ -186,6 +186,10 @@ protected:
     return std::make_tuple(DomainIdMap, DomainVector, BVs, InstDomainValMap);
   }
 
+  void checkInDomain(const TDomainElem &Elem) {
+    InternalRuntimeChecker(DomainIdMap.find(Elem) != DomainIdMap.end());
+  }
+
 }; // class Framework
 
 /// @brief For each domain element type, we have to define:
@@ -265,71 +269,39 @@ struct UnconditionalInterval : public Interval {
 };
 
 struct ConditionalInterval : public Interval {
-  enum class KindBranch { TrueBranch = 0, FalseBranch = 1 };
-  struct CustomKey {
-    const llvm::ICmpInst *AnICmpInst = nullptr;
-    KindBranch branch = KindBranch::TrueBranch;
-    bool operator==(const CustomKey &other) const {
-      return AnICmpInst == other.AnICmpInst && branch == other.branch;
-    }
-    CustomKey(const llvm::ICmpInst *_AnICmpIns, KindBranch _branch)
-        : AnICmpInst(_AnICmpIns), branch(_branch) {}
-  };
-  struct CustomKeyHash {
-    std::size_t operator()(const CustomKey &key) const {
-      // 结合两个成员的哈希值
-      std::size_t h1 = std::hash<const llvm::Value *>()(key.AnICmpInst);
-      std::size_t h2 = std::hash<int>()(static_cast<int>(key.branch));
-      return h1 ^ (h2 << 1); // XOR 结合位移
-    }
-  };
-  using CondInterMap =
-      typename ::std::unordered_map<CustomKey, UnconditionalInterval,
-                                    CustomKeyHash>;
-  CondInterMap ICmpInstToIntervalMap;
-
+  std::vector<UnconditionalInterval> UItvs;
   ConditionalInterval() {}
 
-  ConditionalInterval(CondInterMap _ICmpInstToIntervalMap)
-      : ICmpInstToIntervalMap(_ICmpInstToIntervalMap) {}
+  ConditionalInterval(std::vector<UnconditionalInterval> _UItvs)
+      : UItvs(_UItvs) {}
 
   ConditionalInterval operator&(const ConditionalInterval &Other) const {
-    InternalRuntimeChecker(ICmpInstToIntervalMap.size() ==
-                           Other.ICmpInstToIntervalMap.size());
-    CondInterMap ResultMap{};
-    for (const auto &[k, v] : ICmpInstToIntervalMap) {
-      InternalRuntimeChecker(Other.ICmpInstToIntervalMap.find(k) !=
-                             Other.ICmpInstToIntervalMap.end());
-      ResultMap[k] = v & Other.ICmpInstToIntervalMap.at(k);
+    InternalRuntimeChecker(UItvs.size() == Other.UItvs.size());
+    std::vector<UnconditionalInterval> ResultUItvs;
+    for (size_t Index = 0; Index < UItvs.size(); ++Index) {
+      ResultUItvs.push_back(UItvs.at(Index) & Other.UItvs.at(Index));
     }
-    return ConditionalInterval(ResultMap);
+    return ConditionalInterval(ResultUItvs);
   }
 
   ConditionalInterval operator|(const ConditionalInterval &Other) const {
-    InternalRuntimeChecker(ICmpInstToIntervalMap.size() ==
-                           Other.ICmpInstToIntervalMap.size());
-    CondInterMap ResultMap{};
-    for (const auto &[k, v] : ICmpInstToIntervalMap) {
-      InternalRuntimeChecker(Other.ICmpInstToIntervalMap.find(k) !=
-                             Other.ICmpInstToIntervalMap.end());
-      ResultMap[k] = v | Other.ICmpInstToIntervalMap.at(k);
+    InternalRuntimeChecker(UItvs.size() == Other.UItvs.size());
+    std::vector<UnconditionalInterval> ResultUItvs;
+    for (size_t Index = 0; Index < UItvs.size(); ++Index) {
+      ResultUItvs.push_back(UItvs.at(Index) | Other.UItvs.at(Index));
     }
-    return ConditionalInterval(ResultMap);
+    return ConditionalInterval(ResultUItvs);
   }
 
   dfa::UnconditionalInterval *getMeet() const {
     return new dfa::UnconditionalInterval(std::accumulate(
-        ICmpInstToIntervalMap.begin(), ICmpInstToIntervalMap.end(),
-        dfa::UnconditionalInterval::top(),
+        UItvs.begin(), UItvs.end(), dfa::UnconditionalInterval::top(),
         [](dfa::UnconditionalInterval Acc,
-           const std::pair<dfa::ConditionalInterval::CustomKey,
-                           dfa::UnconditionalInterval> &P) {
-          return Acc | P.second;
-        }));
+           const dfa::UnconditionalInterval &U) { return Acc | U; }));
   }
 
   bool operator==(const ConditionalInterval &Other) const {
-    return ICmpInstToIntervalMap == Other.ICmpInstToIntervalMap;
+    return UItvs == Other.UItvs;
   }
 };
 
@@ -367,14 +339,13 @@ public:
     return UItv;
   }
 
-  void forceSetUnconditionalInterval(const UnconditionalInterval &UItv) {
+  void forceSetUnconditionalInterval(const UnconditionalInterval &SomeUItv) {
     if (tryGetUnconditionalInterval()) {
-      *tryGetUnconditionalInterval() = UItv;
+      *tryGetUnconditionalInterval() = SomeUItv;
     } else {
       InternalRuntimeChecker(bool(tryGetConditionalInterval()));
-      for (const auto &[Key, _] :
-           tryGetConditionalInterval()->ICmpInstToIntervalMap) {
-        tryGetConditionalInterval()->ICmpInstToIntervalMap[Key] = UItv;
+      for (auto &UItv : tryGetConditionalInterval()->UItvs) {
+        UItv = SomeUItv;
       }
     }
   }
@@ -440,13 +411,9 @@ template <> struct ValuePrinter<IntervalWrapper> {
     } else {
       const ConditionalInterval *CPtr = V.tryGetConditionalInterval();
       InternalRuntimeChecker(bool(CPtr));
-      for (const auto &[K, AnInterval] : CPtr->ICmpInstToIntervalMap) {
+      for (const UnconditionalInterval &AnInterval : CPtr->UItvs) {
         std::snprintf(Buffer + strlen(Buffer), sizeof(Buffer) - strlen(Buffer),
-                      "(%s, %s):[%d, %d]", K.AnICmpInst->getName().data(),
-                      K.branch == ConditionalInterval::KindBranch::TrueBranch
-                          ? "TrueBranch"
-                          : "FalseBranch",
-                      AnInterval.Low, AnInterval.High);
+                      "[%d, %d]", AnInterval.Low, AnInterval.High);
       }
     }
     return Buffer;

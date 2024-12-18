@@ -76,8 +76,8 @@ void transferIntervalWrapper(const Instruction &Inst,
   } else {
     dfa::ConditionalInterval *CItvResult = Result.tryGetConditionalInterval();
     InternalRuntimeChecker(bool(CItvResult));
-    for (auto &[k, _] : CItvResult->ICmpInstToIntervalMap) {
-      CItvResult->ICmpInstToIntervalMap[k] = UItvResult0;
+    for (auto &UItv : CItvResult->UItvs) {
+      UItv = UItvResult0;
     }
   }
   return;
@@ -148,22 +148,16 @@ bool IntegerRange::transferFunc(const Instruction &Inst, const DomainVal_t &IDV,
       } else {
         InternalRuntimeChecker(0);
       }
-      dfa::ConditionalInterval::CustomKey KeyTrueBranch(
-          AnICmpInstPtr, dfa::ConditionalInterval::KindBranch::TrueBranch);
-      dfa::ConditionalInterval::CustomKey KeyFalseBranch(
-          AnICmpInstPtr, dfa::ConditionalInterval::KindBranch::FalseBranch);
-      InternalRuntimeChecker(
-          CForkedVariable->ICmpInstToIntervalMap.find(KeyTrueBranch) !=
-          CForkedVariable->ICmpInstToIntervalMap.end());
-      InternalRuntimeChecker(
-          CForkedVariable->ICmpInstToIntervalMap.find(KeyFalseBranch) !=
-          CForkedVariable->ICmpInstToIntervalMap.end());
-      CForkedVariable->ICmpInstToIntervalMap[KeyTrueBranch] =
-          CForkedVariable->ICmpInstToIntervalMap[KeyTrueBranch] &
-          *UItvTrueBranch;
-      CForkedVariable->ICmpInstToIntervalMap[KeyFalseBranch] =
-          CForkedVariable->ICmpInstToIntervalMap[KeyFalseBranch] &
-          *UItvFalseBranch;
+
+      size_t Bits = 1 << ConditionBitIndex.at((ICmpInst *)AnICmpInstPtr);
+      for (size_t Index : getIndexesMatchingBits(Op1, Bits, 0)) {
+        CForkedVariable->UItvs.at(Index) =
+            CForkedVariable->UItvs.at(Index) & *UItvTrueBranch;
+      }
+      for (size_t Index : getIndexesMatchingBits(Op1, 0, Bits)) {
+        CForkedVariable->UItvs.at(Index) =
+            CForkedVariable->UItvs.at(Index) & *UItvFalseBranch;
+      }
     }
   } else if (Inst.getOpcode() == Instruction::PHI) {
     InternalRuntimeChecker(isa<llvm::PHINode>(&Inst));
@@ -195,29 +189,31 @@ bool IntegerRange::transferFunc(const Instruction &Inst, const DomainVal_t &IDV,
 }
 
 void IntegerRange::syncCondition(DomainVal_t &DV) {
-  for (const auto [condition, variable] : ConditionToBindVariableMap) {
-    InternalRuntimeChecker(DomainIdMap.find(condition) != DomainIdMap.end());
-    InternalRuntimeChecker(DomainIdMap.find(variable) != DomainIdMap.end());
-    size_t ConditionIndex = DomainIdMap[condition];
-    size_t VariableIndex = DomainIdMap[variable];
-    InternalRuntimeChecker(DV[ConditionIndex].tryGetUnconditionalInterval());
-    InternalRuntimeChecker(DV[VariableIndex].tryGetConditionalInterval());
-    auto &ICmpInstToIntervalMap =
-        DV[VariableIndex].tryGetConditionalInterval()->ICmpInstToIntervalMap;
-    if (*DV[ConditionIndex].tryGetUnconditionalInterval() ==
-        dfa::UnconditionalInterval(1, 1)) {
-      dfa::ConditionalInterval::CustomKey Key(
-          condition, dfa::ConditionalInterval::KindBranch::FalseBranch);
-      InternalRuntimeChecker(ICmpInstToIntervalMap.find(Key) !=
-                             ICmpInstToIntervalMap.end());
-      ICmpInstToIntervalMap[Key] = dfa::UnconditionalInterval::top();
-    } else if (*DV[ConditionIndex].tryGetUnconditionalInterval() ==
-               dfa::UnconditionalInterval(0, 0)) {
-      dfa::ConditionalInterval::CustomKey Key(
-          condition, dfa::ConditionalInterval::KindBranch::TrueBranch);
-      InternalRuntimeChecker(ICmpInstToIntervalMap.find(Key) !=
-                             ICmpInstToIntervalMap.end());
-      ICmpInstToIntervalMap[Key] = dfa::UnconditionalInterval::top();
+  for (const auto &[AnBindedVariable, Conditions] :
+       BindedVariableToConditionsMap) {
+    size_t CleanTrueBits = 0;
+    size_t CleanFalseBits = 0;
+    for (size_t ConditionBitIndex = 0; ConditionBitIndex < Conditions.size();
+         ++ConditionBitIndex) {
+      checkInDomain(Conditions.at(ConditionBitIndex));
+      dfa::IntervalWrapper ConditionItv =
+          DV.at(DomainIdMap.at(Conditions.at(ConditionBitIndex)));
+      InternalRuntimeChecker(bool(ConditionItv.tryGetUnconditionalInterval()));
+      if (*ConditionItv.tryGetUnconditionalInterval() ==
+          dfa::UnconditionalInterval(1, 1)) {
+        CleanFalseBits |= (1 << ConditionBitIndex);
+      }
+      if (*ConditionItv.tryGetUnconditionalInterval() ==
+          dfa::UnconditionalInterval(0, 0)) {
+        CleanTrueBits |= (1 << ConditionBitIndex);
+      }
+    }
+    dfa::ConditionalInterval *CItv =
+        DV.at(DomainIdMap.at(AnBindedVariable)).tryGetConditionalInterval();
+    InternalRuntimeChecker(bool(CItv));
+    for (size_t Index : getIndexesMatchingBits(AnBindedVariable, CleanTrueBits,
+                                               CleanFalseBits)) {
+      CItv->UItvs.at(Index) = dfa::UnconditionalInterval::top();
     }
   }
 }
