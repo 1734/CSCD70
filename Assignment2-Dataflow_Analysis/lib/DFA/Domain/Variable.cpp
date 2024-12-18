@@ -12,4 +12,19 @@ raw_ostream &operator<<(raw_ostream &Outs, const Variable &Var) {
 void Variable::Initializer::visitInstruction(Instruction &I) {
 
   /// @todo(CSCD70) Please complete this method.
+  if (I.getType()->isVoidTy()) {
+    return;
+  }
+  DomainIdMap[&I] = DomainVector.size();
+  DomainVector.push_back(&I);
+  if (isa<ICmpInst>(&I)) {
+    InternalRuntimeChecker(isa<ConstantInt>(I.getOperand(1)));
+  }
+}
+
+void Variable::Initializer::visitFunction(llvm::Function &F) {
+  for (const auto &Arg : F.args()) {
+    DomainIdMap[&Arg] = DomainVector.size();
+    DomainVector.push_back(&Arg);
+  }
 }

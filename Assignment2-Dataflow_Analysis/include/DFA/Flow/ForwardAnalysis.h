@@ -1,6 +1,8 @@
 #pragma once // NOLINT(llvm-header-guard)
 
 #include "Framework.h"
+#include "Utility.h"
+#include <llvm/IR/CFG.h>
 
 namespace dfa {
 
@@ -41,10 +43,10 @@ protected:
     const llvm::BasicBlock *const ParentBB = Inst.getParent();
 
     if (&Inst == &(ParentBB->front())) {
-      errs() << "\n";
+      errs() << "\n  " << ParentBB->getName() << "\n";
       LOG_ANALYSIS_INFO << "\t" << stringifyDomainWithMask(BVs.at(ParentBB));
     } // if (&Inst == &(*ParentBB->begin()))
-    outs() << Inst << "\n";
+    errs() << Inst << "\n";
     LOG_ANALYSIS_INFO << "\t"
                       << stringifyDomainWithMask(InstDomainValMap.at(&Inst));
   }

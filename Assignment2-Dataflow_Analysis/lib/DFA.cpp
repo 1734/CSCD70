@@ -18,6 +18,10 @@ extern "C" PassPluginLibraryInfo llvmGetPassPluginInfo() {
                   /// @todo(CSCD70) Please complete the registration of other
                   ///               passes.
                 });
+            PB.registerAnalysisRegistrationCallback(
+                [](FunctionAnalysisManager &FAM) {
+                  FAM.registerPass([&]() { return IntegerRange(); });
+                });
             PB.registerPipelineParsingCallback(
                 [](StringRef Name, FunctionPassManager &FPM,
                    ArrayRef<PassBuilder::PipelineElement>) -> bool {
@@ -35,6 +39,10 @@ extern "C" PassPluginLibraryInfo llvmGetPassPluginInfo() {
                   }
                   if (Name == "lcm") {
                     FPM.addPass(LCMWrapperPass());
+                    return true;
+                  }
+                  if (Name == "integer-range") {
+                    FPM.addPass(IntegerRangeWrapperPass());
                     return true;
                   }
                   return false;

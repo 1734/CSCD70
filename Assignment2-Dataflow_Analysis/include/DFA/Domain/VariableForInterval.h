@@ -11,11 +11,13 @@
 
 namespace dfa {
 
-struct Variable final : DomainBase<Variable> {
+struct VariableForInterval final : DomainBase<VariableForInterval> {
   const llvm::Value *const Var;
-  Variable(const llvm::Value *const Var) : Var(Var) {}
+  VariableForInterval(const llvm::Value *const Var) : Var(Var) {}
 
-  bool operator==(const Variable &Other) const { return Var == Other.Var; }
+  bool operator==(const VariableForInterval &Other) const {
+    return Var == Other.Var;
+  }
 
   bool contain(const llvm::Value *const Val) const final {
 
@@ -23,25 +25,28 @@ struct Variable final : DomainBase<Variable> {
 
     return Var == Val;
   }
-  Variable replaceValueWith(const llvm::Value *const SrcVal,
-                            const llvm::Value *const DstVal) const final {
+  VariableForInterval
+  replaceValueWith(const llvm::Value *const SrcVal,
+                   const llvm::Value *const DstVal) const final {
 
     /// @todo(CSCD70) Please complete this method.
 
     return *this;
   }
 
-  using DomainBase<Variable>::DomainIdMap_t;
-  using DomainBase<Variable>::DomainVector_t;
-
+  using DomainBase<VariableForInterval>::DomainIdMap_t;
+  using DomainBase<VariableForInterval>::DomainVector_t;
   struct Initializer : public llvm::InstVisitor<Initializer> {
     DomainIdMap_t &DomainIdMap;
     DomainVector_t &DomainVector;
+    std::unordered_map<llvm::ICmpInst *, llvm::Value *>
+        &ConditionToBindVariableMap;
     explicit Initializer(DomainIdMap_t &DomainIdMap,
                          DomainVector_t &DomainVector,
                          std::unordered_map<llvm::ICmpInst *, llvm::Value *>
                              &ConditionToBindVariableMap)
-        : DomainIdMap(DomainIdMap), DomainVector(DomainVector) {}
+        : DomainIdMap(DomainIdMap), DomainVector(DomainVector),
+          ConditionToBindVariableMap(ConditionToBindVariableMap) {}
     void visitInstruction(llvm::Instruction &I);
     void visitFunction(llvm::Function &F);
   };
@@ -49,12 +54,13 @@ struct Variable final : DomainBase<Variable> {
 
 } // namespace dfa
 
-llvm::raw_ostream &operator<<(llvm::raw_ostream &, const dfa::Variable &);
+llvm::raw_ostream &operator<<(llvm::raw_ostream &,
+                              const dfa::VariableForInterval &);
 
 namespace std {
 
-template <> struct hash<::dfa::Variable> {
-  size_t operator()(const dfa::Variable &Var) const {
+template <> struct hash<::dfa::VariableForInterval> {
+  size_t operator()(const dfa::VariableForInterval &Var) const {
     return hash<const llvm::Value *>()(Var.Var);
   }
 };

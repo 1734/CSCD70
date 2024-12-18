@@ -1,10 +1,14 @@
 #pragma once // NOLINT(llvm-header-guard)
 
+#include "Utility.h"
 #include <llvm/IR/Function.h>
 #include <llvm/IR/InstIterator.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/Support/raw_ostream.h>
 
+#include <numeric>
+#include <ostream>
 #include <tuple>
 namespace dfa {
 
@@ -20,6 +24,7 @@ protected:
   using DomainIdMap_t = typename TDomainElem::DomainIdMap_t;
   using DomainVector_t = typename TDomainElem::DomainVector_t;
   using DomainVal_t = typename TMeetOp::DomainVal_t;
+  using Initializer = typename TDomainElem::Initializer;
   using MeetOperands_t = std::vector<DomainVal_t>;
   using MeetBBConstRange_t = TMeetBBConstRange;
   using BBConstRange_t = TBBConstRange;
@@ -31,6 +36,8 @@ protected:
 
   DomainIdMap_t DomainIdMap;
   DomainVector_t DomainVector;
+  DomainVal_t TopDomainVal;
+  DomainVal_t BottomDomainVal;
   std::unordered_map<const llvm::BasicBlock *, DomainVal_t> BVs;
   std::unordered_map<const llvm::Instruction *, DomainVal_t> InstDomainValMap;
 
@@ -47,9 +54,9 @@ protected:
         << Mask.size() << " vs. " << DomainIdMap.size() << " vs. "
         << DomainVector.size() << " instead";
     for (size_t DomainId = 0; DomainId < DomainIdMap.size(); ++DomainId) {
-      if (!static_cast<bool>(Mask[DomainId])) {
-        continue;
-      }
+      // if (!static_cast<bool>(Mask[DomainId])) {
+      //   continue;
+      // }
       Strout << DomainVector.at(DomainId)
              << ValuePrinter<TValue>::print(Mask[DomainId]) << ", ";
     } // for (MaskIdx : [0, Mask.size()))
@@ -90,15 +97,24 @@ protected:
     MeetOperands_t Operands;
 
     /// @todo(CSCD70) Please complete this method.
-
+    for (auto MeetBB : getMeetBBConstRange(BB)) {
+      InternalRuntimeChecker(bool(MeetBB->getTerminator()));
+      auto ItVal = InstDomainValMap.find(MeetBB->getTerminator());
+      InternalRuntimeChecker(ItVal != InstDomainValMap.end());
+      printInstDomainValMap(*MeetBB->getTerminator());
+      Operands.push_back(ItVal->second);
+    }
     return Operands;
   }
   DomainVal_t bc() const { return DomainVal_t(DomainIdMap.size()); }
   DomainVal_t meet(const MeetOperands_t &MeetOperands) const {
 
     /// @todo(CSCD70) Please complete this method.
-
-    return DomainVal_t(DomainIdMap.size());
+    return std::accumulate(MeetOperands.begin(), MeetOperands.end(),
+                           TopDomainVal,
+                           [](DomainVal_t Acc, DomainVal_t Current) {
+                             return TMeetOp().operator()(Acc, Current);
+                           });
   }
 
   /// @}
@@ -123,7 +139,18 @@ protected:
     bool Changed = false;
 
     /// @todo(CSCD70) Please complete this method.
-
+    for (const auto &BB : getBBConstRange(F)) {
+      if (!BB.isEntryBlock()) {
+        BVs[&BB] = getBoundaryVal(BB);
+      }
+      const DomainVal_t *PrevInstrOut = &BVs[&BB];
+      for (const auto &Inst : getInstConstRange(BB)) {
+        if (transferFunc(Inst, *PrevInstrOut, InstDomainValMap[&Inst])) {
+          Changed = true;
+        }
+        PrevInstrOut = &InstDomainValMap[&Inst];
+      }
+    }
     return Changed;
   }
 
@@ -144,7 +171,18 @@ protected:
                                llvm::FunctionAnalysisManager &FAM) {
 
     /// @todo(CSCD70) Please complete this method.
-
+    // Initializer(DomainIdMap, DomainVector).visit(F);
+    // for (const auto &BB : getBBConstRange(F)) {
+    //   if (BB.isEntryBlock()) {
+    //     BVs[&BB] = TMeetOp().bottom(DomainVector.size());
+    //   }
+    //   for (const auto &Inst : getInstConstRange(BB)) {
+    //     InstDomainValMap[&Inst] = TMeetOp().top(DomainVector.size());
+    //   }
+    // }
+    // while (traverseCFG(F)) {
+    // }
+    // printInstDomainValMap(F);
     return std::make_tuple(DomainIdMap, DomainVector, BVs, InstDomainValMap);
   }
 
@@ -164,7 +202,255 @@ struct Bool {
     return {.Value = Value || Other.Value};
   }
   static Bool top() { return {.Value = true}; }
+  static Bool bottom() { return {.Value = false}; }
   explicit operator bool() const { return Value; }
+};
+
+template <> struct ValuePrinter<Bool> {
+  static std::string print(const Bool &V) { return V ? "true" : "false"; };
+};
+
+struct Interval {
+  enum { ItvMin = -1000, ItvMax = 1000 };
+  virtual ~Interval() = default;
+};
+
+struct UnconditionalInterval : public Interval {
+  int Low = 0, High = 0;
+
+  UnconditionalInterval() {}
+
+  explicit UnconditionalInterval(int _low, int _high)
+      : Low(std::max(_low, (int)ItvMin)), High(std::min(_high, (int)ItvMax)) {
+    if (Low > High) {
+      Low = 0;
+      High = -1;
+    }
+  }
+
+  explicit UnconditionalInterval(int i)
+      : Low(std::max(i, (int)ItvMin)), High(std::min(i, (int)ItvMax)) {}
+
+  UnconditionalInterval operator&(const UnconditionalInterval &Other) const {
+    if (Low > High) {
+      return *this;
+    }
+    if (Other.Low > Other.High) {
+      return Other;
+    }
+    return UnconditionalInterval(std::max(Low, Other.Low),
+                                 std::min(High, Other.High));
+  }
+
+  UnconditionalInterval operator|(const UnconditionalInterval &Other) const {
+    if (Low > High) {
+      return Other;
+    }
+    if (Other.Low > Other.High) {
+      return *this;
+    }
+    return UnconditionalInterval(std::min(Low, Other.Low),
+                                 std::max(High, Other.High));
+  }
+
+  bool operator==(const UnconditionalInterval &Other) const {
+    return Low == Other.Low && High == Other.High;
+  }
+
+  static UnconditionalInterval top() { return UnconditionalInterval(0, -1); }
+
+  static UnconditionalInterval bottom() {
+    return UnconditionalInterval(ItvMin, ItvMax);
+  }
+};
+
+struct ConditionalInterval : public Interval {
+  enum class KindBranch { TrueBranch = 0, FalseBranch = 1 };
+  struct CustomKey {
+    const llvm::ICmpInst *AnICmpInst = nullptr;
+    KindBranch branch = KindBranch::TrueBranch;
+    bool operator==(const CustomKey &other) const {
+      return AnICmpInst == other.AnICmpInst && branch == other.branch;
+    }
+    CustomKey(const llvm::ICmpInst *_AnICmpIns, KindBranch _branch)
+        : AnICmpInst(_AnICmpIns), branch(_branch) {}
+  };
+  struct CustomKeyHash {
+    std::size_t operator()(const CustomKey &key) const {
+      // 结合两个成员的哈希值
+      std::size_t h1 = std::hash<const llvm::Value *>()(key.AnICmpInst);
+      std::size_t h2 = std::hash<int>()(static_cast<int>(key.branch));
+      return h1 ^ (h2 << 1); // XOR 结合位移
+    }
+  };
+  using CondInterMap =
+      typename ::std::unordered_map<CustomKey, UnconditionalInterval,
+                                    CustomKeyHash>;
+  CondInterMap ICmpInstToIntervalMap;
+
+  ConditionalInterval() {}
+
+  ConditionalInterval(CondInterMap _ICmpInstToIntervalMap)
+      : ICmpInstToIntervalMap(_ICmpInstToIntervalMap) {}
+
+  ConditionalInterval operator&(const ConditionalInterval &Other) const {
+    InternalRuntimeChecker(ICmpInstToIntervalMap.size() ==
+                           Other.ICmpInstToIntervalMap.size());
+    CondInterMap ResultMap{};
+    for (const auto &[k, v] : ICmpInstToIntervalMap) {
+      InternalRuntimeChecker(Other.ICmpInstToIntervalMap.find(k) !=
+                             Other.ICmpInstToIntervalMap.end());
+      ResultMap[k] = v & Other.ICmpInstToIntervalMap.at(k);
+    }
+    return ConditionalInterval(ResultMap);
+  }
+
+  ConditionalInterval operator|(const ConditionalInterval &Other) const {
+    InternalRuntimeChecker(ICmpInstToIntervalMap.size() ==
+                           Other.ICmpInstToIntervalMap.size());
+    CondInterMap ResultMap{};
+    for (const auto &[k, v] : ICmpInstToIntervalMap) {
+      InternalRuntimeChecker(Other.ICmpInstToIntervalMap.find(k) !=
+                             Other.ICmpInstToIntervalMap.end());
+      ResultMap[k] = v | Other.ICmpInstToIntervalMap.at(k);
+    }
+    return ConditionalInterval(ResultMap);
+  }
+
+  dfa::UnconditionalInterval *getMeet() const {
+    return new dfa::UnconditionalInterval(std::accumulate(
+        ICmpInstToIntervalMap.begin(), ICmpInstToIntervalMap.end(),
+        dfa::UnconditionalInterval::top(),
+        [](dfa::UnconditionalInterval Acc,
+           const std::pair<dfa::ConditionalInterval::CustomKey,
+                           dfa::UnconditionalInterval> &P) {
+          return Acc | P.second;
+        }));
+  }
+
+  bool operator==(const ConditionalInterval &Other) const {
+    return ICmpInstToIntervalMap == Other.ICmpInstToIntervalMap;
+  }
+};
+
+struct IntervalWrapper {
+private:
+  std::variant<UnconditionalInterval, ConditionalInterval> Data;
+
+public:
+  IntervalWrapper(const UnconditionalInterval &UItv) : Data(UItv) {}
+  IntervalWrapper(const ConditionalInterval &CItv) : Data(CItv) {}
+
+  UnconditionalInterval *tryGetUnconditionalInterval() {
+    return std::get_if<UnconditionalInterval>(&Data);
+  }
+
+  const UnconditionalInterval *tryGetUnconditionalInterval() const {
+    return std::get_if<UnconditionalInterval>(&Data);
+  }
+
+  ConditionalInterval *tryGetConditionalInterval() {
+    return std::get_if<ConditionalInterval>(&Data);
+  }
+
+  const ConditionalInterval *tryGetConditionalInterval() const {
+    return std::get_if<ConditionalInterval>(&Data);
+  }
+
+  const UnconditionalInterval *forceGetUnconditionalInterval() const {
+    const dfa::UnconditionalInterval *UItv = tryGetUnconditionalInterval();
+    if (!UItv) {
+      const dfa::ConditionalInterval *CItv = tryGetConditionalInterval();
+      InternalRuntimeChecker(bool(CItv));
+      UItv = CItv->getMeet();
+    }
+    return UItv;
+  }
+
+  void forceSetUnconditionalInterval(const UnconditionalInterval &UItv) {
+    if (tryGetUnconditionalInterval()) {
+      *tryGetUnconditionalInterval() = UItv;
+    } else {
+      InternalRuntimeChecker(bool(tryGetConditionalInterval()));
+      for (const auto &[Key, _] :
+           tryGetConditionalInterval()->ICmpInstToIntervalMap) {
+        tryGetConditionalInterval()->ICmpInstToIntervalMap[Key] = UItv;
+      }
+    }
+  }
+
+  IntervalWrapper operator&(const IntervalWrapper &Other) const {
+    const UnconditionalInterval *UPtr = tryGetUnconditionalInterval();
+    if (UPtr) {
+      const UnconditionalInterval *UPtrOther =
+          Other.tryGetUnconditionalInterval();
+      InternalRuntimeChecker(bool(UPtrOther));
+      return IntervalWrapper(UPtr->operator&(*UPtrOther));
+    }
+    const ConditionalInterval *CPtr = tryGetConditionalInterval();
+    InternalRuntimeChecker(bool(CPtr));
+    const ConditionalInterval *CPtrOther = Other.tryGetConditionalInterval();
+    InternalRuntimeChecker(bool(CPtrOther));
+    return IntervalWrapper(CPtr->operator&(*CPtrOther));
+  }
+
+  IntervalWrapper operator|(const IntervalWrapper &Other) const {
+    const UnconditionalInterval *UPtr = tryGetUnconditionalInterval();
+    if (UPtr) {
+      const UnconditionalInterval *UPtrOther =
+          Other.tryGetUnconditionalInterval();
+      InternalRuntimeChecker(bool(UPtrOther));
+      return IntervalWrapper(UPtr->operator|(*UPtrOther));
+    }
+    const ConditionalInterval *CPtr = tryGetConditionalInterval();
+    InternalRuntimeChecker(bool(CPtr));
+    const ConditionalInterval *CPtrOther = Other.tryGetConditionalInterval();
+    InternalRuntimeChecker(bool(CPtrOther));
+    return IntervalWrapper(CPtr->operator|(*CPtrOther));
+  }
+
+  bool operator==(const IntervalWrapper &Other) const {
+    if (tryGetUnconditionalInterval()) {
+      if (!Other.tryGetUnconditionalInterval()) {
+        return false;
+      }
+      return *tryGetUnconditionalInterval() ==
+             *Other.tryGetUnconditionalInterval();
+    }
+    InternalRuntimeChecker(static_cast<bool>(tryGetConditionalInterval()));
+    if (!Other.tryGetConditionalInterval()) {
+      return false;
+    }
+    return *tryGetConditionalInterval() == *Other.tryGetConditionalInterval();
+  }
+
+  static IntervalWrapper top() { return UnconditionalInterval(0, -1); }
+
+  static IntervalWrapper bottom() {
+    return UnconditionalInterval(Interval::ItvMin, Interval::ItvMax);
+  }
+};
+
+template <> struct ValuePrinter<IntervalWrapper> {
+  static std::string print(const IntervalWrapper &V) {
+    char Buffer[1024] = {0};
+    const UnconditionalInterval *UPtr = V.tryGetUnconditionalInterval();
+    if (UPtr) {
+      std::snprintf(Buffer, sizeof(Buffer), "[%d, %d]", UPtr->Low, UPtr->High);
+    } else {
+      const ConditionalInterval *CPtr = V.tryGetConditionalInterval();
+      InternalRuntimeChecker(bool(CPtr));
+      for (const auto &[K, AnInterval] : CPtr->ICmpInstToIntervalMap) {
+        std::snprintf(Buffer + strlen(Buffer), sizeof(Buffer) - strlen(Buffer),
+                      "(%s, %s):[%d, %d]", K.AnICmpInst->getName().data(),
+                      K.branch == ConditionalInterval::KindBranch::TrueBranch
+                          ? "TrueBranch"
+                          : "FalseBranch",
+                      AnInterval.Low, AnInterval.High);
+      }
+    }
+    return Buffer;
+  }
 };
 
 } // namespace dfa

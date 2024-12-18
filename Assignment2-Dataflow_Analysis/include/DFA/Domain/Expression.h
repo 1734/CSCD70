@@ -24,6 +24,17 @@ struct Expression final : DomainBase<Expression> {
   bool operator==(const Expression &Other) const final {
 
     /// @todo(CSCD70) Please complete this method.
+    if (this->Opcode != Other.Opcode) {
+      return false;
+    }
+    if (this->LHS == Other.LHS && this->RHS == Other.RHS) {
+      return true;
+    }
+    if ((this->Opcode == llvm::Instruction::BinaryOps::Add ||
+         this->Opcode == llvm::Instruction::BinaryOps::Mul) &&
+        this->LHS == Other.RHS && this->RHS == Other.LHS) {
+      return true;
+    }
     return false;
   }
 
@@ -31,6 +42,9 @@ struct Expression final : DomainBase<Expression> {
 
     /// @todo(CSCD70) Please complete this method.
 
+    if (this->LHS == Val || this->RHS == Val) {
+      return true;
+    }
     return false;
   }
   Expression replaceValueWith(const llvm::Value *const SrcVal,
@@ -66,6 +80,8 @@ template <> struct hash<::dfa::Expression> {
 
     /// @todo(CSCD70) Please complete this method.
 
+    HashVal = hash<long>()((long)Expr.Opcode) ^ hash<long>()((long)Expr.LHS) ^
+              hash<long>()((long)Expr.RHS);
     return HashVal;
   }
 };

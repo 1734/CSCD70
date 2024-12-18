@@ -8,5 +8,9 @@ add_library(DFA SHARED DFA.cpp
                        4-LCM/4-PostponableExprs.cpp
                        4-LCM/5-LatestPlacement.cpp
                        4-LCM/6-UsedExprs.cpp
+                       5-IntegerRange.cpp
                        DFA/Domain/Expression.cpp
-                       DFA/Domain/Variable.cpp)
+                       DFA/Domain/Variable.cpp
+                       DFA/Domain/VariableForInterval.cpp)
+
+target_compile_options(DFA PRIVATE -frtti)
